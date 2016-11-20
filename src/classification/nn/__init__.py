@@ -25,7 +25,7 @@ logger = logging.getLogger('myutils')
 rng = numpy.random.RandomState(23455)
 from theano.tensor import shared_randomstreams
 
-seq_features = ['letters', 'words', 'ngrams2', 'ngrams3', 'ngrams4', 'ngrams5']
+seq_features = ['letters', 'words', 'ngrams2', 'ngrams3', 'ngrams4', 'ngrams5', 'subwords', 'desc_features']
 
 def scan_func(M):
     def loop (row):
@@ -261,7 +261,7 @@ def get_comb_stream(fea2obj, which_set, batch_size=None, shuffle=True, num_examp
         
 
 from blocks.bricks import Linear, Tanh
-from blocks.bricks import WEIGHT, MLP, Rectifier, Tanh, Linear, Softmax, Logistic
+from blocks.bricks import MLP, Rectifier, Tanh, Linear, Softmax, Logistic
 from blocks import initialization
 from blocks.bricks.base import Parameters, application
 from blocks.bricks.cost import BinaryCrossEntropy, Cost

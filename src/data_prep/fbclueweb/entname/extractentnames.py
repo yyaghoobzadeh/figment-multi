@@ -6,6 +6,18 @@ Created on Nov 3, 2015
 from src.data_prep.fbclueweb.entname import *
 
 
+def load_ent2name2freq(inpath):
+    print "loading ent2name2freq from: ", inpath
+    e2name2freq = defaultdict(dict)
+    with open(inpath) as fp:
+        for l in fp:
+            parts = l.strip().split('\t')
+            name2freq = {} 
+            for i in range(1, len(parts[1:]) - 1, 2):
+                name2freq[parts[i]] = int(parts[i + 1])
+            e2name2freq[parts[0]] = name2freq
+    return e2name2freq
+
 def save_entitynames(mye2name2freq, outfile, max_name=10):
     with open(outfile, 'w') as fp:
         for mye in mye2name2freq:
@@ -30,8 +42,11 @@ if __name__ == '__main__':
     linespath = '/nfs/data1/proj/cluewebwork/nlu/experiments/entity-categorization/allTypes/sbj_datasets/17nov/figertypes/NYT_expr/dsFromNYT/in_figer_types/test_lines'
     fromFACC = True
     if fromFACC:
-        mye2name2freq = readFaccs(faccpath)
-        save_entitynames(mye2name2freq, 'ent2names.txt')
+        if True:
+            mye2name2freq = readFaccs(faccpath)
+            save_entitynames(mye2name2freq, 'ent2names.txt')
+        else:
+            mye2name2freq = load_ent2name2freq('ent2names.txt')
         write_ds_names(Etrain, mye2name2freq, ds_dir + 'Etrain.names') 
         write_ds_names(Edev, mye2name2freq, ds_dir + 'Edev.names') 
         write_ds_names(Etest, mye2name2freq, ds_dir + 'Etest.names') 

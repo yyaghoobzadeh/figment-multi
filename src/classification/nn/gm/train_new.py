@@ -29,7 +29,7 @@ from src.classification.nn.gm.model import build_input_objs, build_model_new
 import src.common.myutils as cmn
 import theano.tensor as T
 import argparse
-from blocks.bricks import WEIGHT, MLP, Tanh, NDimensionalSoftmax, Linear, Softmax, Logistic
+from blocks.bricks import MLP, Tanh, NDimensionalSoftmax, Linear, Softmax, Logistic
 from blocks.serialization import load
 from src.classification.nn.gm.make_dataset_new import load_ent_ds
 from numpy import argmax
@@ -39,12 +39,20 @@ import math
 
 dirname, _ = os.path.split(os.path.abspath(__file__))
 
+print theano.__version__
+print theano
+
 def sigmoid(x):
     return 1 / (1 + math.exp(-x))
   
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 logger = logging.getLogger('train.py')
-rng = numpy.random.RandomState(23455)
+seed = 42
+if "gpu" in theano.config.device:
+    srng = theano.sandbox.cuda.rng_curand.CURAND_RandomStreams(seed=seed)
+else:
+    srng = T.shared_randomstreams.RandomStreams(seed=seed)
+
 
 class EntityTypingGlobal(object):
     def __init__(self, config):
@@ -53,22 +61,21 @@ class EntityTypingGlobal(object):
     def training(self, fea2obj, batch_size, learning_rate=0.005, steprule='adagrad', wait_epochs=5, kl_weight_init=None, klw_ep=50, klw_inc_rate=0, num_epochs=None):
         networkfile = self._config['net']
         
-        num_of_hidden_units = int(self._config['hidden_units'])
         n_epochs = num_epochs or int(self._config['nepochs'])
         reg_weight=float(self._config['loss_weight'])
         reg_type=self._config['loss_reg']
         numtrain = int(self._config['num_train']) if 'num_train' in self._config else None
         train_stream, num_samples_train = get_comb_stream(fea2obj, 'train', batch_size, shuffle=True, num_examples=numtrain)
-        dev_stream, num_samples_dev = get_comb_stream(fea2obj, 'dev', batch_size=None, shuffle=True)
+        dev_stream, num_samples_dev = get_comb_stream(fea2obj, 'dev', batch_size=None, shuffle=False)
         logger.info('sources: %s -- number of train/dev samples: %d/%d', train_stream.sources, num_samples_train, num_samples_dev)
         
         t2idx = fea2obj['targets'].t2idx
-        logger.info('#MLP_hiddenunits: %d', num_of_hidden_units)
         klw_init = kl_weight_init or float(self._config['kld_weight']) if 'kld_weight' in self._config else 1
         logger.info('kl_weight_init: %d', klw_init)
         kl_weight = shared_floatx(klw_init, 'kl_weight')
         entropy_weight = shared_floatx(1., 'entropy_weight')
-        cost, p_at_1, y_hat, KLD, logpy_xz, pat1_recog, misclassify_rate= build_model_new(fea2obj, len(t2idx), self._config, kl_weight, entropy_weight)
+        
+        cost, p_at_1, _, KLD, logpy_xz, pat1_recog, misclassify_rate= build_model_new(fea2obj, len(t2idx), self._config, kl_weight, entropy_weight)
         
         cg = ComputationGraph(cost)
         
@@ -131,13 +138,13 @@ class EntityTypingGlobal(object):
         main_loop.run()
     
     
-    def testing(self):
+    def testing(self, fea2obj):
         config = self._config
         dsdir = config['dsdir']
         devfile = dsdir + '/dev.txt'
         testfile = dsdir + '/test.txt'
         networkfile = config['net']
-        batch_size = int(config['batchsize'])
+        batch_size = 10000#int(config['batchsize'])
         devMentions = load_ent_ds(devfile)
         tstMentions = load_ent_ds(testfile)
         logger.info('#dev: %d #test: %d', len(devMentions), len(tstMentions))
@@ -147,17 +154,27 @@ class EntityTypingGlobal(object):
         old_model = main_loop.model
         logger.info(old_model.inputs)
         sources = [inp.name for inp in old_model.inputs]
-        fea2obj = build_input_objs(sources, config)
+#         fea2obj = build_input_objs(sources, config)
         t2idx = fea2obj['targets'].t2idx
         deterministic = str_to_bool(config['use_mean_pred']) if 'use_mean_pred' in config else True 
         kl_weight = shared_floatx(0.001, 'kl_weight')
         entropy_weight= shared_floatx(0.001, 'entropy_weight')
        
+       
         cost, _, y_hat, _, _,_,_ = build_model_new(fea2obj, len(t2idx), self._config, kl_weight, entropy_weight, deterministic=deterministic, test=True)
         model = Model(cost)
         model.set_parameter_values(old_model.get_parameter_values())
         
-        theinputs = [inp for inp in model.inputs if inp.name != 'targets']
+        theinputs = []
+        for fe in fea2obj.keys():
+            if 'targets' in fe:
+                continue
+            for inp in model.inputs:
+                if inp.name == fe:
+                    theinputs.append(inp)
+                    
+#         theinputs = [inp for inp in model.inputs if inp.name != 'targets']
+        print "theinputs: ", theinputs
         predict = theano.function(theinputs, y_hat)
         
         test_stream, num_samples_test = get_comb_stream(fea2obj, 'test', batch_size, shuffle=False)
@@ -165,31 +182,34 @@ class EntityTypingGlobal(object):
         logger.info('sources: %s -- number of test/dev samples: %d/%d', test_stream.sources, num_samples_test, num_samples_dev)
         idx2type = {idx:t for t,idx in t2idx.iteritems()}
         
-        logger.info('Starting to apply on test inputs')
-        self.applypredict(theinputs, predict, test_stream, tstMentions, num_samples_test, batch_size, config['exp_dir'] + config['matrixtest'])
-        logger.info('apply on test data finished')
-        logger.info('Starting to apply on dev inputs')
-        self.applypredict(theinputs, predict, dev_stream, devMentions, num_samples_dev, batch_size, config['exp_dir'] + config['matrixdev'])
-        logger.info('apply on dev data finished')
+        logger.info('Starting to apply on dev inputs...')
+        self.applypredict(theinputs, predict, dev_stream, devMentions, num_samples_dev, batch_size, os.path.join(config['exp_dir'], config['matrixdev']), idx2type)
+        logger.info('...apply on dev data finished')
         
-    def applypredict(self, theinputs, predict, data_stream, dsMentions, num_samples, batch_size, outfile):
+        logger.info('Starting to apply on test inputs...')
+        self.applypredict(theinputs, predict, test_stream, tstMentions, num_samples_test, batch_size, os.path.join(config['exp_dir'], config['matrixtest']), idx2type)
+        logger.info('...apply on test data finished')
+        
+    def applypredict(self, theinputs, predict, data_stream, dsMentions, num_samples, batch_size, outfile, idx2type):
         num_batches = num_samples / batch_size
         if num_samples % batch_size != 0:
             num_batches += 1
         goods = 0.;
         epoch_iter = data_stream.get_epoch_iterator(as_dict=True)
         f = open(outfile, 'w') 
+        print num_batches
         for i in range(num_batches):
             src2vals  = epoch_iter.next()
             inp = [src2vals[src.name] for src in theinputs]
             probs = predict(*inp)
+            
             y_curr = src2vals['targets']
             for j in range(len(probs)):
                 index = i * batch_size + j;
                 if index >= num_samples: break
                 maxtype_ix = argmax(probs[j])
-    #             max2 = argmax(probs[j][0:maxtype_ix]); max22 = argmax(probs[j][maxtype_ix+1:len(probs)])
-    #            print idx2type[maxtype_ix], '####', dsMentions[index].name, '###', dsMentions[index].alltypes
+#                 max2 = argmax(probs[j][0:maxtype_ix]); max22 = argmax(probs[j][maxtype_ix+1:len(probs)])
+#                 print idx2type[maxtype_ix], '####', dsMentions[index].name, '###', dsMentions[index].alltypes, '###', idx2type[argmax(src2vals['tc'][j])], maxtype_ix
                 if y_curr[j][maxtype_ix] == 1:
                     goods += 1
                 onestr = dsMentions[index].entityId + '\t'
@@ -206,7 +226,7 @@ class EntityTypingGlobal(object):
         cmd = 'python ' + dirname + '/matrix2measures_types.py ' + configfile + ' > ' + configfile + '.meas.types'
         p = Popen(cmd, shell=True); 
         p.wait()
-
+        
 def main(args):
     logger.info('loading config file: %s', args.config)
     exp_dir, _ = os.path.split(os.path.abspath(args.config))
@@ -223,26 +243,29 @@ def main(args):
         else:
             inp_srcs.append(fea)
     our_sources = inp_srcs + ['targets']
-    print our_sources
+    
     fea2obj = build_input_objs(our_sources, config)
+    
     typer = EntityTypingGlobal(config) 
     if args.train:
         import shutil
         #typer.training(fea2obj, batch_size, learning_rate=float(config['lrate']), steprule=config['steprule'], wait_epochs=10, kl_weight_init=1, klw_ep=100, klw_inc_rate=0, num_epochs=50)
-        typer.training(fea2obj, batch_size, learning_rate=float(config['lrate']), steprule=config['steprule'], wait_epochs=3, num_epochs=15)
+        typer.training(fea2obj, batch_size, learning_rate=float(config['lrate']), steprule=config['steprule'], wait_epochs=3, num_epochs=30)
+        shutil.copyfile(config['net']+'.best.pkl', config['net']+'.toload.pkl')
+        shutil.copyfile(config['net']+'.best.pkl', config['net']+'.best1.pkl')
+        # logger.info('One more epoch training...')
+        # typer.training(fea2obj, batch_size, learning_rate=float(config['lrate'])/2, steprule=config['steprule'], wait_epochs=2, klw_ep=10, kl_weight_init=0.008, num_epochs=20)
+        # shutil.copyfile(config['net']+'.best.pkl', config['net']+'.toload.pkl')
+        # shutil.copyfile(config['net']+'.best.pkl', config['net']+'.best2.pkl')
+        #logger.info('One more epoch training...')
+        #typer.training(fea2obj, batch_size, learning_rate=float(config['lrate'])/2, steprule=config['steprule'], wait_epochs=2, klw_ep=10, kl_weight_init=0.02, num_epochs=10)
         shutil.copyfile(config['net']+'.best.pkl', config['net']+'.toload.pkl')
         logger.info('One more epoch training...')
-        typer.training(fea2obj, batch_size, learning_rate=float(config['lrate'])/2, steprule=config['steprule'], wait_epochs=2, klw_ep=10, kl_weight_init=0.01, num_epochs=20)
-        shutil.copyfile(config['net']+'.best.pkl', config['net']+'.toload.pkl')
-        logger.info('One more epoch training...')
-        typer.training(fea2obj, batch_size, learning_rate=float(config['lrate'])/2, steprule=config['steprule'], wait_epochs=2, klw_ep=10, kl_weight_init=0.02, num_epochs=10)
-        shutil.copyfile(config['net']+'.best.pkl', config['net']+'.toload.pkl')
-        logger.info('One more epoch training...')
-        typer.training(fea2obj, batch_size=100, learning_rate=0.005, steprule='adagrad', wait_epochs=2, klw_ep=10, kl_weight_init=0.025, num_epochs=10)
+        typer.training(fea2obj, batch_size=100, learning_rate=0.005, steprule='adagrad', wait_epochs=2, klw_ep=10, kl_weight_init=None, num_epochs=10)
 
 
     if args.test:
-        typer.testing()
+        typer.testing(fea2obj)
     
     if args.eval:
         typer.evaluate(args.config)
@@ -268,6 +291,7 @@ def get_argument_parser():
     return parser
     
 if __name__ == '__main__':
+#     theano.config.dnn.enabled = False
     parser = get_argument_parser()
     args = parser.parse_args()
     main(args)

@@ -7,9 +7,10 @@ import sys, os, string
 import theano,numpy, codecs, h5py, yaml, logging
 from src.common.myutils import convertTargetsToBinVec, yyreadwordvectors, get_ngram_seq, \
     read_embeddings_vocab, buildtypevecmatrix, buildcosinematrix,\
-    read_embeddings, get_ent_names
+    read_embeddings, get_ent_names, str_to_bool
 from _collections import defaultdict
 from collections import namedtuple
+import operator
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 logger = logging.getLogger('makefueldataset')
 import src.common.myutils as cmn
@@ -65,7 +66,7 @@ def load_ent_ds(dsfile):
                    "alltypes",    # How often does this type appear
                    ])
     f = open(dsfile)
-    f = codecs.open(dsfile, encoding='utf-8')
+#     f = codecs.open(dsfile, encoding='utf-8')
 
     instances = []
     for line in f:
@@ -106,6 +107,7 @@ def build_word_vocab(mentions):
         words = mn.name.split(' ')
         for w in words:
             word2freq[w] += 1
+    print "word2freq len", len(word2freq)
     vocab = []
     for w in word2freq:
         if word2freq[w] < MIN_FREQ:
@@ -179,7 +181,76 @@ def build_letters_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir, vector
                                     data=embeddings)
         vectors.attrs['vectorsize'] = vectorsize
 
-def build_words_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir, vectorfile, max_num_words=10, upto=None):
+
+def build_voc_from_features(ent2features):
+    v2i = {}
+    i2v = {}
+    v2freq = defaultdict(lambda: 0)
+    for e, fea_list in ent2features.items():
+        for fea in fea_list:
+            v2freq[fea] += 1
+    v2freq[padTag] = 1
+    v2freq[startTag] = 1
+    v2freq[endTag] = 1
+    v2freq[unkTag] = 1
+    for i, v in enumerate(v2freq):
+        v2i[v] = i
+        i2v[i] = v
+    return v2i, i2v
+
+def load_ent2features(ent2tfidf_features_path):
+    ent2features = {}
+    with open(ent2tfidf_features_path) as fp:
+        for l in fp:
+            parts = l.strip().split('\t')
+            ent2features[parts[0]] = parts[1].split()
+    return ent2features
+
+def build_desc_features_ds(trnMentions, devMentions, tstMentions, ent2tfidf_features_path, t2idx, dsdir, vectorfile, use_lowercase=True, upto=None):
+    if ent2tfidf_features_path == None:
+        print "Warning: ignoring tfidf features building..."
+        return
+    ent2features = load_ent2features(ent2tfidf_features_path)
+    word_to_idx, idx_to_word = build_voc_from_features(ent2features)
+    logger.info('tfidf desc features vocab size: %d', len(word_to_idx))
+    totals = len(trnMentions) + len(devMentions) + len(tstMentions) 
+    input_features = numpy.zeros(shape=(totals, len(ent2features.values()[0])), dtype='int32')
+    ent_no_emb = 0
+    for i, men in enumerate(trnMentions + devMentions + tstMentions):
+        if men.entityId not in ent2features:
+            ent_no_emb += 1
+            continue
+        features = ent2features[men.entityId]
+        input_features[i] = get_ngram_seq(word_to_idx, features, max_len=input_features.shape[1])
+    logger.info('shape of tfidf input dataset: %s', input_features.shape)
+    logger.info('number of entities without embeddings: %d', ent_no_emb)
+    hdf5_file = dsdir + '_desc_features.h5py'
+    f = h5py.File(hdf5_file, mode='w')
+    features = f.create_dataset('desc_features', input_features.shape, dtype='int32')  # @UndefinedVariable
+    
+    features.attrs['voc2idx'] = yaml.dump(word_to_idx, default_flow_style=False)
+    features.attrs['idx2voc'] = yaml.dump(idx_to_word, default_flow_style=False)
+    features.attrs['vocabsize'] = len(word_to_idx)
+    features[...] = input_features
+    features.dims[0].label = 'description_features'
+    nsamples_train = len(trnMentions); nsamples_dev = len(devMentions);
+    split_dict = {
+        'train': {'desc_features': (0, nsamples_train)},
+        'dev': {'desc_features': (nsamples_train, nsamples_train + nsamples_dev)}, 
+        'test': {'desc_features': (nsamples_train + nsamples_dev, totals)}}
+    f.attrs['split'] = H5PYDataset.create_split_array(split_dict)
+    f.flush();f.close()
+    
+    logger.info('Building desc_features dataset finished. It saved in: %s', hdf5_file)
+    logger.info('writing word embeddings')
+    idx2embeddings, vectorsize = read_embeddings_vocab(vectorfile, vocab=word_to_idx, use_lowercase=use_lowercase, num=upto)
+    print "embeddings shape: ", idx2embeddings.shape
+    with h5py.File(dsdir + "_desc_features_embeddings.h5py", mode='w') as fp:
+        vectors = fp.create_dataset('vectors', compression='gzip',
+                                    data=idx2embeddings)
+        vectors.attrs['vectorsize'] = vectorsize
+        
+def build_words_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir, vectorfile, max_num_words=10, use_lowercase=False, upto=None):
     word_to_idx, idx_to_word = build_word_vocab(trnMentions+devMentions+tstMentions) #train for characters because we only use entities names for characters
     logger.info('word vocab size: %d', len(word_to_idx))
     totals = len(trnMentions) + len(devMentions) + len(tstMentions) 
@@ -205,13 +276,53 @@ def build_words_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir, vectorfi
         'test': {'words': (nsamples_train + nsamples_dev, totals)}}
     f.attrs['split'] = H5PYDataset.create_split_array(split_dict)
     f.flush();f.close()
+    
     logger.info('Building words dataset finished. It saved in: %s', hdf5_file)
+    
     logger.info('writing word embeddings')
-    idx2embeddings, vectorsize = read_embeddings_vocab(vectorfile, vocab=word_to_idx, num=upto)
+    idx2embeddings, vectorsize = read_embeddings_vocab(vectorfile, vocab=word_to_idx, use_lowercase=use_lowercase, num=upto)
+    print "embeddings shape: ", idx2embeddings.shape
     with h5py.File(dsdir + "_words_embeddings.h5py", mode='w') as fp:
         vectors = fp.create_dataset('vectors', compression='gzip',
                                     data=idx2embeddings)
         vectors.attrs['vectorsize'] = vectorsize
+
+def build_subwords_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir, vectorfile, use_lowercase=False, max_num_words=10, upto=None):
+    if vectorfile == None:
+        return
+    word_to_idx, idx_to_word = build_word_vocab(trnMentions+devMentions+tstMentions) #train for characters because we only use entities names for characters
+    logger.info('word vocab size: %d', len(word_to_idx))
+    totals = len(trnMentions) + len(devMentions) + len(tstMentions) 
+    input_words = numpy.zeros(shape=(totals, max_num_words), dtype='int32')
+    for i, men in enumerate(trnMentions + devMentions + tstMentions):
+        name = men.name
+        words = name.split()
+        input_words[i] = get_ngram_seq(word_to_idx, words, max_len=max_num_words)
+    logger.info('shape of subwords dataset: %s', input_words.shape)
+    hdf5_file = dsdir + '_subwords.h5py'
+    f = h5py.File(hdf5_file, mode='w')
+    features = f.create_dataset('subwords', input_words.shape, dtype='int32')  # @UndefinedVariable
+    
+    features.attrs['voc2idx'] = yaml.dump(word_to_idx, default_flow_style=False)
+    features.attrs['idx2voc'] = yaml.dump(idx_to_word, default_flow_style=False)
+    features.attrs['vocabsize'] = len(word_to_idx)
+    features[...] = input_words
+    features.dims[0].label = 'words'
+    nsamples_train = len(trnMentions); nsamples_dev = len(devMentions);
+    split_dict = {
+        'train': {'subwords': (0, nsamples_train)},
+        'dev': {'subwords': (nsamples_train, nsamples_train + nsamples_dev)}, 
+        'test': {'subwords': (nsamples_train + nsamples_dev, totals)}}
+    f.attrs['split'] = H5PYDataset.create_split_array(split_dict)
+    f.flush();f.close()
+    logger.info('Building subwords dataset finished. It saved in: %s', hdf5_file)
+    logger.info('writing subword embeddings')
+    idx2embeddings, vectorsize = read_embeddings_vocab(vectorfile, vocab=word_to_idx, use_lowercase=use_lowercase, num=upto)
+    with h5py.File(dsdir + "_subwords_embeddings.h5py", mode='w') as fp:
+        vectors = fp.create_dataset('vectors', compression='gzip',
+                                    data=idx2embeddings)
+        vectors.attrs['vectorsize'] = vectorsize
+
         
 def build_ngram_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir, vectorfile, ngram, max_num_ngrams=98, upto=-1):
     ngram_to_idx, idx_to_word, name2ngrams = build_ngram_vocab(trnMentions+devMentions+tstMentions,ngram=ngram, MIN_FREQ=5) #train for characters because we only use entities names for characters
@@ -294,30 +405,39 @@ def build_entvec_ds(trnMentions, devMentions, tstMentions, t2idx, hdf5_file, vec
     f.close()
     logger.info('Building entityVec dataset finished. It saved in: %s', hdf5_file)
 
-def build_hsNgram_ds(config, trnMentions, devMentions, tstMentions, t2idx, hdf5_file, embpath, vectorsize=200, upto=-1):
-    emb_version = os.path.basename(embpath)
-    nsamples_train = len(trnMentions); nsamples_dev = len(devMentions);
-    totals = nsamples_train + nsamples_dev + len(tstMentions) 
-    input_hsngram_matrix = numpy.zeros(shape=(totals, vectorsize), dtype='float32')
-    input_hsngram_matrix[0:nsamples_train] = load_embmatirx(embpath+'/train.txt', len(trnMentions), vectorsize, upto)
-    input_hsngram_matrix[nsamples_train:nsamples_train+nsamples_dev] = load_embmatirx(embpath+'/dev.txt', len(devMentions), vectorsize, upto)
-    input_hsngram_matrix[nsamples_train+nsamples_dev:totals] = load_embmatirx(embpath+'/test.txt', len(tstMentions), vectorsize, upto)
-    print input_hsngram_matrix.shape
-    srcname = 'hsngram' + emb_version
-    hdf5_file += '_'+ srcname + '.h5py'
-    f = h5py.File(hdf5_file, mode='w')
-    features = f.create_dataset(srcname, input_hsngram_matrix.shape, dtype='float32')  # @UndefinedVariable
-    features.attrs['vectorsize'] = vectorsize
-    features[...] = input_hsngram_matrix
-    features.dims[0].label = srcname + '_vector'
-    split_dict = {
-        'train': {srcname: (0, nsamples_train)},
-        'dev': {srcname: (nsamples_train, nsamples_train + nsamples_dev)}, 
-        'test': {srcname: (nsamples_train + nsamples_dev, totals)}}    
-    f.attrs['split'] = H5PYDataset.create_split_array(split_dict)
-    f.flush()
-    f.close()
-    logger.info('Building hinrich ngram-level embeddings of mentions finished. It saved in: %s', hdf5_file)
+def get_vec_size(dspath):
+    with open(dspath) as fp:
+        return len(fp.readline().split('\t')[4].split())
+        
+def build_hsNgram_ds(config, trnMentions, devMentions, tstMentions, t2idx, hdf5_file, embpath, emb_list, vectorsize=200, upto=-1):
+    print "building hs Ngram datasets: ", emb_list
+    for emb_version in emb_list:
+        print emb_version
+        mypath = os.path.join(embpath, emb_version)
+        nsamples_train = len(trnMentions); nsamples_dev = len(devMentions);
+        totals = nsamples_train + nsamples_dev + len(tstMentions) 
+        vectorsize = get_vec_size(mypath+'/train.txt')
+        input_hsngram_matrix = numpy.zeros(shape=(totals, vectorsize), dtype='float32')
+        input_hsngram_matrix[0:nsamples_train] = load_embmatirx(mypath+'/train.txt', len(trnMentions), vectorsize, upto)
+        input_hsngram_matrix[nsamples_train:nsamples_train+nsamples_dev] = load_embmatirx(mypath+'/dev.txt', len(devMentions), vectorsize, upto)
+        input_hsngram_matrix[nsamples_train+nsamples_dev:totals] = load_embmatirx(mypath+'/test.txt', len(tstMentions), vectorsize, upto)
+        print input_hsngram_matrix.shape
+        srcname = 'hsngram_' + emb_version
+        hdf5_file = hdf5_file + '_'+ srcname + '.h5py'
+        print hdf5_file
+        f = h5py.File(hdf5_file, mode='w')
+        features = f.create_dataset(srcname, input_hsngram_matrix.shape, dtype='float32')  # @UndefinedVariable
+        features.attrs['vectorsize'] = vectorsize
+        features[...] = input_hsngram_matrix
+        features.dims[0].label = srcname + '_vector'
+        split_dict = {
+            'train': {srcname: (0, nsamples_train)},
+            'dev': {srcname: (nsamples_train, nsamples_train + nsamples_dev)}, 
+            'test': {srcname: (nsamples_train + nsamples_dev, totals)}}    
+        f.attrs['split'] = H5PYDataset.create_split_array(split_dict)
+        f.flush()
+        f.close()
+        logger.info('Building hinrich ngram-level embeddings of mentions finished. It saved in: %s', hdf5_file)
 
 def build_typecosine_ds(trnMentions, devMentions, tstMentions, t2idx, hdf5_file, vectorfile, upto=-1):
     (embeddings, voc2idx, vectorsize) = read_embeddings(vectorfile, upto)
@@ -349,6 +469,74 @@ def build_typecosine_ds(trnMentions, devMentions, tstMentions, t2idx, hdf5_file,
     f.close()
     logger.info('Building types-ent cosine (tc) dataset finished. It saved in: %s', hdf5_file)
 
+def build_type_words_cosine_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir, vectorfile, upto=-1, max_num_words=4):
+    word_to_idx, idx_to_word = build_word_vocab(trnMentions+devMentions+tstMentions) #train for characters because we only use entities names for characters
+    logger.info('word vocab size: %d', len(word_to_idx))
+    totals = len(trnMentions) + len(devMentions) + len(tstMentions) 
+    
+    idx2embeddings, vectorsize = read_embeddings_vocab(vectorfile, vocab=word_to_idx, num=upto)
+    
+    input_avg = numpy.zeros(shape=(totals, vectorsize), dtype='float32')
+    for i, men in enumerate(trnMentions + devMentions + tstMentions):
+        name = men.name
+        words = name.split()
+        seq_words = get_ngram_seq(word_to_idx, words, max_len=max_num_words)
+        avgvec = numpy.zeros(shape=(vectorsize))
+        for ii in seq_words:
+            avgvec += idx2embeddings[ii]
+        avgvec /= len(seq_words)
+        input_avg[i] = avgvec
+    
+    (embeddings, voc2idx, vectorsize) = read_embeddings(vectorfile, upto)
+    typevecmatrix = buildtypevecmatrix(t2idx, embeddings, vectorsize, voc2idx) # a matrix with size: 102 * dim
+    words_types_cosin_matrix = buildcosinematrix(input_avg, typevecmatrix)
+    logger.info(words_types_cosin_matrix.shape)
+     
+    dsdir += '_tcwords.h5py'
+    f = h5py.File(dsdir, mode='w')
+    features = f.create_dataset('tcwords', words_types_cosin_matrix.shape, dtype='float32')  # @UndefinedVariable
+    features.attrs['vectorsize'] = words_types_cosin_matrix.shape[1]
+    features[...] = words_types_cosin_matrix
+    features.dims[0].label = 'words_types_cosine'
+    nsamples_train = len(trnMentions); nsamples_dev = len(devMentions);
+    split_dict = {
+        'train': {'tcwords': (0, nsamples_train)},
+        'dev': {'tcwords': (nsamples_train, nsamples_train + nsamples_dev)}, 
+        'test': {'tcwords': (nsamples_train + nsamples_dev, totals)}}    
+    f.attrs['split'] = H5PYDataset.create_split_array(split_dict)
+    f.flush()
+    f.close()
+    logger.info('Building types-words cosine (tcwords) dataset finished. It saved in: %s', dsdir)
+    
+def save_typevecmatrix(t2idx, dsdir, vectorfile, upto=-1):
+    (embeddings, voc2idx, vectorsize) = read_embeddings(vectorfile, upto)
+    typevecmatrix = buildtypevecmatrix(t2idx, embeddings, vectorsize, voc2idx) # a matrix with size: 102 * dim
+    dsdir += '_typematrix.npy'
+    numpy.save(dsdir, numpy.transpose(typevecmatrix))
+    
+def build_type_patterns(trnMentions, t2idx, dsdir, vectorfile, upto=-1):
+    
+    dsdir += '_typeCooccurrMatrix.npy'
+    pattern2freq = defaultdict(lambda: 0)
+    for i, men in enumerate(trnMentions):
+        pattern = [t2idx[t] for t in men.alltypes] 
+        vec = ' '.join([str(v) for v in cmn.convertTargetsToBinVec(pattern, len(t2idx))])
+        pattern2freq[vec] += 1
+    sorted_p2f = sorted(pattern2freq.items(), key=operator.itemgetter(1))
+    
+#     max_pat = 300
+    label_cooccur_matrix = numpy.zeros((len(sorted_p2f), len(t2idx)), dtype='float32')
+    for i, patternfreq in enumerate(sorted_p2f):
+        pattern, freq = patternfreq
+        pattern = numpy.asarray([int(p) for p in pattern.split(' ')]).astype('float32')
+#         vec = cmn.convertTargetsToBinVec(pattern, len(t2idx)).astype('float32')
+        pattern *= numpy.sqrt(6. / (len(pattern) + len(t2idx)))
+#         print pattern
+        label_cooccur_matrix[i] = pattern
+    print len(label_cooccur_matrix)
+    numpy.save(dsdir, label_cooccur_matrix)
+
+
 
 def build_targets_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir):
     totals = len(trnMentions) + len(devMentions) + len(tstMentions) 
@@ -370,6 +558,8 @@ def build_targets_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir):
     f.attrs['split'] = H5PYDataset.create_split_array(split_dict)
     f.flush()
     f.close()
+    
+
 
 def main(args):
     print 'loading config file', args[1]
@@ -384,12 +574,17 @@ def main(args):
     testfile = dsdir + '/test.txt'
     targetTypesFile=config['typefile']
     vectorFile = config['ent_vectors']
+    vectorFile_words = config['word_vectors'] if 'word_vectors' in config else vectorFile
+    subword_vectorFile = config['fasttext_vecfile'] if 'fasttext_vecfile' in config else None
+    ent2tfidf_features_path = config['ent2tfidf_features_path'] if 'ent2tfidf_features_path' in config else None
 #     the_features = config['features'].split(' ') #i.e. letters entvec words tc 
     ngrams = [int(n) for n in config['ngrams_n'].split()] if 'ngrams_n' in config else []
     ngrams_vecfiles = {ngram: config['ngrams'+str(ngram)+'_vecfile'] for ngram in ngrams}
     letter_vecfile = config['letters_vecfile'] if 'letters_vecfile' in config else None
-    hs_ngram_path = config['hsngramvec'] if 'hsngramvec' in config else None
-    
+    hs_ngram_path = config['hsngrampath'] if 'hsngrampath' in config else None
+    hs_ngram_versions = config['hsngram_vecs'].split() if hs_ngram_path else None
+    use_lowercase = str_to_bool(config['use_lowercase']) if 'use_lowercase' in config else False
+    print "uselower: ", use_lowercase
     upto = -1
     (t2idx, _) = cmn.loadtypes(targetTypesFile)
     trnMentions = load_ent_ds(trainfile)
@@ -397,19 +592,24 @@ def main(args):
     tstMentions = load_ent_ds(testfile)
     logger.info("#train : %d #dev : %d #test : %d", len(trnMentions), len(devMentions), len(tstMentions))
     
-    if True:
+    if not os.path.exists(os.path.join(dsdir,'_targets.h5py')):
         build_targets_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir)
         build_entvec_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir, vectorFile, upto=-1)
         build_letters_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir, letter_vecfile, max_len_name=40)
         build_typecosine_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir, vectorFile, upto=-1)
-        build_words_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir, vectorFile, upto=-1)
-        build_hsNgram_ds(config, trnMentions, devMentions, tstMentions, t2idx, dsdir, hs_ngram_path, vectorsize=300, upto=-1)
+        if hs_ngram_path:
+            build_hsNgram_ds(config, trnMentions, devMentions, tstMentions, t2idx, dsdir, hs_ngram_path, hs_ngram_versions, vectorsize=300, upto=-1)
         for ng in ngrams:
             build_ngram_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir, ngrams_vecfiles[ng], ng, upto=-1)
+        build_type_patterns(trnMentions, t2idx, dsdir, vectorFile)
+        save_typevecmatrix(t2idx, dsdir, vectorFile)
+#         build_type_words_cosine_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir, vectorFile, upto=-1)
+        build_subwords_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir, subword_vectorFile, use_lowercase=use_lowercase, upto=-1)
+        build_words_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir, vectorFile_words, use_lowercase=use_lowercase, upto=-1)
+        build_entvec_ds(trnMentions, devMentions, tstMentions, t2idx, dsdir, vectorFile, upto=-1)
+        build_desc_features_ds(trnMentions, devMentions, tstMentions, ent2tfidf_features_path, t2idx, dsdir, vectorFile_words, use_lowercase=True, upto=-1)
     else:
-        if 'hsngramvec':
-            build_hsNgram_ds(config, trnMentions, devMentions, tstMentions, t2idx, dsdir, hs_ngram_path, vectorsize=300, upto=-1)
-        
+        build_desc_features_ds(trnMentions, devMentions, tstMentions, ent2tfidf_features_path, t2idx, dsdir, vectorFile_words, use_lowercase=True, upto=-1)
 if __name__ == '__main__':
     main(sys.argv)
     

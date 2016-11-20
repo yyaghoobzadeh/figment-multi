@@ -14,7 +14,7 @@ Edevfile = config['Edev'] #'/nfs/datm/cluewebwork/nlu/experiments/entity-categor
 
 matrixdev = config['matrixdev'] #'enttypescores_dev' + str(numtype)
 matrixtest = config['matrixtest']#'enttypescores_test' + str(numtype)
-matrixdev = exp_dir + matrixdev; matrixtest = exp_dir + matrixtest
+matrixdev = exp_dir + '/' + matrixdev; matrixtest = exp_dir + '/' + matrixtest
 
 typefilename = config['typefile'] #/nfs/datm/cluewebwork/nlu/experiments/entity-categorization/allTypes/experiments/807types/cis/context-datasets/rndTypes_trndevcontextFreq'
 donorm = str_to_bool(config['norm'])
@@ -68,7 +68,7 @@ etest2f = filltest2freq(Etestfile)
 
 print matrixdev, matrixtest
 (t2i,t2f) = fillt2i(typefilename)
-
+numtype = len(t2i)
 
 e2i_dev = readdsfile(Edevfile, t2i)
 (bigdev, numScorePerType, edev2freq) = loadEnt2ScoresFile(matrixdev, upto, numtype, donorm)

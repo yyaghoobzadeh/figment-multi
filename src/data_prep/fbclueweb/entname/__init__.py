@@ -38,7 +38,7 @@ def readFaccs(mypath):
 
 
 
-def write_ds_names(dsfile, mye2name2freq, nameoutfile, max_name=10):
+def write_ds_names(dsfile, mye2name2freq, nameoutfile, max_name=10, fb_ent2name=None):
     (e2types, t2ents, e2freq) = load_dataset(dsfile)
     f = open(nameoutfile, 'w')
     for mye in e2types:
@@ -55,6 +55,11 @@ def write_ds_names(dsfile, mye2name2freq, nameoutfile, max_name=10):
                 if c == max_name:
                     break
                 c += 1
+        elif fb_ent2name and mye in fb_ent2name:
+            outstr += '\t####\t'
+            for c in range(max_name):
+                outstr += '\t'.join([name, '1000'])
+                outstr += '\t'
         else:
             print mye
         f.write(outstr + '\n')

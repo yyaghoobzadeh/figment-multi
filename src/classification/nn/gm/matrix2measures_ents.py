@@ -259,7 +259,7 @@ if __name__ == '__main__':
     Etrainfile = config['Etrain']
     matrixdev = config['aggmatrixdev']  if 'aggmatrixdev' in config else config['matrixdev'] 
     matrixtest = config['aggmatrixtest']  if 'aggmatrixtest' in config else config['matrixtest'] 
-    matrixdev = exp_dir + matrixdev; matrixtest = exp_dir + matrixtest
+    matrixdev = exp_dir + '/' + matrixdev; matrixtest = exp_dir + '/' + matrixtest
     typefilename = config['typefile']
     freqtype = 'mention'
     if 'ent_freq_type' in config:
@@ -273,6 +273,7 @@ if __name__ == '__main__':
         allow_missing_entity = config['allow_miss_ent']
     print '***', allow_missing_entity
     (t2ix,t2f) = fillt2i(typefilename)
+    numtype = len(t2ix)
     
     e2i_train, e2names_train,_ = load_entname_ds(Etrainfile, t2ix, True)
     e2i_dev, e2names_dev,_ = load_entname_ds(Edevfile, t2ix, True)

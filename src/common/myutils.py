@@ -221,6 +221,17 @@ def read_embeddings(fname, num=-1):
     #       line by line and are reading directly into memory-efficient numpy
     #       arrays.
     logger.info("loading word2vec vectors from: %s", fname)
+    if 'npy' in fname:
+	embeddings = numpy.load(fname)
+	vec_size = embeddings.shape[1]
+	vocfile = fname[:-4] + '.vocab'
+	word_to_idx = {}
+	with open(vocfile) as fp:
+	    for i, l in enumerate(fp):
+		word_to_idx[l.strip()] = i
+	logger.info("number of words in word2vec: %d", len(word_to_idx))
+	return embeddings, word_to_idx, vec_size
+    
     with open(fname) as fp:
         num_vecs, vec_size = (int(x) for x in fp.readline().strip().split())
         num_vecs += 2  # For <UNK>
@@ -738,6 +749,7 @@ def fillt2i(typefilename):
             contextfreq = int(myparts[2])
             t2f[myparts[0]] = (etrn_freq, contextfreq)
     return (t2i,t2f)
+
 def calcPRF(good, bad, total):
     if (good + bad) == 0.0:
         prec = 0
@@ -913,7 +925,7 @@ def get_ent_names(names, maxnum=3):
 def load_entname_ds(dsfile, t2idx, use_ix=False):
     logger.info('loading dataset %s', dsfile)
     f = open(dsfile)
-    e2types = defaultdict()
+    e2types = OrderedDict()
     e2names = OrderedDict()
     e2freq = defaultdict(lambda: 0)
     for line in f:
@@ -950,7 +962,7 @@ def loadtypes(filename):
         c += 1
     return (t2ind, ind2t)
 
-def read_embeddings_vocab(fname, vocab=None, num=-1):
+def read_embeddings_vocab(fname, vocab=None, use_lowercase=False, num=-1):
     """ Read word embeddings from file
 
     :param embedding_file:  Path to embedding file
@@ -963,25 +975,53 @@ def read_embeddings_vocab(fname, vocab=None, num=-1):
     # NOTE: This should be pretty efficient, since we're only reading the file
     #       line by line and are reading directly into memory-efficient numpy
     #       arrays.
+    print "use_lowercase: ", use_lowercase, "filling embeddings from: ", fname
+    
+    (embeddings, word2idx, vectorsize) = read_embeddings(fname, num)
+    numHasEmb = 0
+    if vocab is None:
+        return embeddings, word2idx
+    else:
+        voc_embeddings = numpy.random.random_sample((len(vocab), vectorsize))
+        for v in vocab:
+            if v in word2idx:
+                voc_embeddings[vocab[v]] = embeddings[word2idx[v]]
+                numHasEmb += 1  
+            elif use_lowercase and string.lower(v) in word2idx:
+                voc_embeddings[vocab[v]] = embeddings[word2idx[string.lower(v)]]
+                numHasEmb += 1
+        voc_embeddings[vocab[unkTag]] = numpy.mean(embeddings, axis=0)
+        voc_embeddings[vocab[padTag]] = numpy.zeros((vectorsize,))
+    return voc_embeddings, vectorsize
+    
+    # old code
     with open(fname) as fp:
-        _, vec_size = (int(x) for x in fp.readline().strip().split())
+        num_vec, vec_size = (int(x) for x in fp.readline().strip().split())
         #embeddings = numpy.zeros((len(vocab), vec_size), dtype='float32')
-        embeddings = numpy.random.random_sample((len(vocab), vec_size))
+        embeddings = numpy.random.random_sample((num_vec+1, vec_size))
 #       num_vecs += 1  # For <UNK>
-        nwwemb = 0 #number of vocab words with embeddings
+        numHasEmb = 0 #number of vocab words with embeddings
+        emb_voc = {}
         for idx, line in enumerate(fp, start=1):
             if num != -1 and idx > num:
                 break
             parts = line.strip().split()
-            if vocab is not None and parts[0] not in vocab:
-                continue
-            nwwemb += 1
-            embeddings[vocab[parts[0]]] = [float(v) for v in parts[1:]]
-        embeddings[vocab[unkTag]] = numpy.mean(embeddings, axis=0)
-        embeddings[vocab[padTag]] = numpy.zeros((vec_size,))
+            emb_voc[parts[0]] = idx
+            embeddings[idx] = [float(v) for v in parts[1:]]
+        
+        voc_embeddings = numpy.random.random_sample((len(vocab), vec_size))
+        for v in vocab:
+            if v in emb_voc:
+                voc_embeddings[vocab[v]] = embeddings[emb_voc[v]]
+                numHasEmb += 1  
+            elif use_lowercase and string.lower(v) in emb_voc:
+                voc_embeddings[vocab[v]] = embeddings[emb_voc[string.lower(v)]]
+                numHasEmb += 1
+        voc_embeddings[vocab[unkTag]] = numpy.mean(embeddings, axis=0)
+        voc_embeddings[vocab[padTag]] = numpy.zeros((vec_size,))
     #rare words are unknown and words that do not have embeddings have zero
-    logger.info('number of vocabs that have word2vec embeddings: %d', nwwemb)  
-    return embeddings, vec_size
+    logger.info('number of vocabs that have word2vec embeddings: %d', numHasEmb)  
+    return voc_embeddings, vec_size
 
 def build_type2entmatrix(bigmatrix, fblist, t2i, norm=False):
     lineno = -1

@@ -9,8 +9,8 @@ import theano
 from blocks import initialization
 from blocks import main_loop
 from blocks.bricks import Linear, Tanh, Initializable, Feedforward, Sequence
-from blocks.bricks import WEIGHT, MLP, Rectifier, Tanh, Linear, Softmax, Logistic
-from blocks.bricks.conv import Convolutional, MaxPooling, ConvolutionalSequence, ConvolutionalActivation, Flattener
+from blocks.bricks import MLP, Rectifier, Tanh, Linear, Softmax, Logistic
+from blocks.bricks.conv import Convolutional, MaxPooling, ConvolutionalSequence, Flattener
 from blocks.bricks.cost import CategoricalCrossEntropy, MisclassificationRate, BinaryCrossEntropy
 from blocks.bricks.lookup import LookupTable
 from blocks.bricks.lookup import LookupTable
@@ -34,6 +34,7 @@ from src.common.myutils import debug_print, logger, str_to_bool
 from src.classification.nn.gm.wpdefined import KmaxPooling
 import theano.tensor as T
 from src.classification.nn import ranking_loss, softmax_layer
+from collections import OrderedDict
 logger = logging.getLogger('model.py')
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 logger = logging.getLogger('myutils')
@@ -41,10 +42,11 @@ rng = numpy.random.RandomState(23455)
 from blocks.bricks.cost import Cost
 from blocks.bricks.base import Parameters, application
 
-seq_features = ['letters', 'words', 'ngrams2', 'ngrams3', 'ngrams4', 'ngrams5']
+seq_features = ['letters', 'words', 'ngrams2', 'ngrams3', 'ngrams4', 'ngrams5', 'subwords', 'desc_features']
 seed = 42
 if "gpu" in theano.config.device:
     srng = theano.sandbox.cuda.rng_curand.CURAND_RandomStreams(seed=seed)
+    srng = T.shared_randomstreams.RandomStreams(seed=seed)
 else:
     srng = T.shared_randomstreams.RandomStreams(seed=seed)
 
@@ -142,7 +144,7 @@ def get_comb_stream(fea2obj, which_set, batch_size=None, shuffle=True, num_examp
         if batch_size == None: batch_size = dataset.num_examples
         if num_examples == None: num_examples = dataset.num_examples
         if shuffle: 
-            iterschema = ShuffledScheme(examples=num_examples, batch_size=batch_size)
+            iterschema = ShuffledScheme(examples=num_examples, batch_size=batch_size, rng=numpy.random.RandomState(seed))
         else: 
             iterschema = SequentialScheme(examples=num_examples, batch_size=batch_size)
         stream = DataStream(dataset=dataset, iteration_scheme=iterschema)
@@ -150,7 +152,7 @@ def get_comb_stream(fea2obj, which_set, batch_size=None, shuffle=True, num_examp
             stream = CutInput(stream, obj.max_len)
             if obj.rec == True:
                 logger.info('transforming data for recursive input')
-                stream = LettersTransposer(stream, which_sources=fea)# Required because Recurrent bricks receive as input [sequence, batch,# features]
+                stream = LettersTransposer(stream, which_sources=fea)# Required because Recurrent last_hid receive as input [sequence, batch,# features]
         streams.append(stream)
     stream = Merge(streams, tuple(fea2obj.keys()))
     return stream, num_examples
@@ -278,13 +280,27 @@ class Target():
             t2idx = yaml.load(f[self.name].attrs['type_to_ix'])
             return t2idx
         
-def initialize(to_init):
+def initialize(to_init, rndstd=0.01):
     for bricks in to_init:
         bricks.weights_init = initialization.Uniform(width=0.08)
         bricks.biases_init = initialization.Constant(0)
         bricks.initialize()
 
-# def initialize2(brick, num_filters, fwidth, embedding_size, num_feature_map):
+def initialize_lasthid(last_hid, matrixfile=None, max_dim=None):
+    rng = numpy.random.RandomState(42)
+    w = 0.08
+    myarray = rng.uniform(-w, +w, size=(last_hid.input_dim, last_hid.output_dim))
+    print myarray.shape
+    if matrixfile:
+        typematrix = (numpy.load(matrixfile))
+        if max_dim == None: max_dim = len(typematrix)
+        print typematrix.shape
+        myarray[0:max_dim, :] = typematrix[0:max_dim, :]
+        print myarray
+    last_hid.weights_init = initialization.Constant(myarray)
+    last_hid.biases_init = initialization.Constant(0)
+    last_hid.initialize()
+    
 def initialize2(brick, num_feature_maps):
     fan_in = numpy.prod(brick.filter_size)
     fan_out = numpy.prod(brick.filter_size) * brick.num_filters / num_feature_maps
@@ -381,6 +397,7 @@ def create_yy_cnn(numConvLayer, conv_input, embedding_size, input_len, config, p
     outpool = act.apply(pool_layer.apply(lastconv_out).flatten(2))
     return outpool, lastconv.num_filters
 
+
 def create_kim_cnn(layer0_input, embedding_size, input_len, config, pref):
     '''
         One layer convolution with different filter-sizes and maxpooling
@@ -418,7 +435,7 @@ def create_kim_cnn(layer0_input, embedding_size, input_len, config, pref):
 
 def create_OLD_kim_cnn(layer0_input, embedding_size, input_len, config, pref):
     '''
-        One layer convolution with different filter-sizes and maxpooling
+        One layer convolution with the same filtersize
     '''
     filter_width_list = [int(fw) for fw in config[pref + '_filterwidth'].split()]
     print filter_width_list
@@ -426,34 +443,17 @@ def create_OLD_kim_cnn(layer0_input, embedding_size, input_len, config, pref):
     totfilters = 0
     for i, fw in enumerate(filter_width_list):
         num_feature_map = input_len - fw + 1 #39
-        conv = ConvolutionalActivation(
-                    activation=Rectifier().apply,
-                    filter_size=(fw, embedding_size), num_filters=num_filters,
+        conv = Convolutional(
+                    filter_size=(fw, embedding_size), 
+                    num_filters=num_filters,
                     num_channels=1,
                     image_size=(input_len, embedding_size),
                     name="conv" + str(fw))
         pooling = MaxPooling((num_feature_map,1), name="pool"+str(fw))
         initialize([conv])
                 
-#         conv = Convolutional(
-#             image_size=(input_len, embedding_size),
-#             filter_size=(fw, embedding_size),
-#             num_filters=num_filters,
-#             num_channels=1
-#         )
-#         initialize2(conv, num_feature_map)
         totfilters += num_filters
-        outpool = Flattener(name="flat"+str(fw)).apply(pooling.apply(conv.apply(layer0_input)))
-#         conv.name = pref + 'conv_' + str(fw)
-#         convout = conv.apply(layer0_input)
-#         pool_layer = MaxPooling(
-#             pooling_size=(num_feature_map,1)
-#         )
-#         pool_layer.name = pref + 'pool_' + str(fw)
-#         act = Rectifier()
-#         act.name = pref + 'act_' + str(fw)
-#         outpool = pool_layer.apply(act.apply(convout)).flatten(2)
-#         outpool = act.apply(pool_layer.apply(convout)).flatten(2)
+        outpool = Flattener(name="flat"+str(fw)).apply(Rectifier(name=pref+'act_'+str(fw)).apply(pooling.apply(conv.apply(layer0_input))))
         if i == 0:
             outpools = outpool
         else:
@@ -502,8 +502,8 @@ def create_cnn_general(xemb, embedding_size, input_len, config, pref):
     xemb = debug_print(xemb, 'afterLookup', False)
     layer0_input = xemb.flatten().reshape((xemb.shape[0], 1, input_len, embedding_size))
     if numConvLayers == 1:
-	return create_kim_cnn(layer0_input, embedding_size, input_len, config, pref)
-        #return create_OLD_kim_cnn(layer0_input, embedding_size, input_len, config, pref)
+        # return create_kim_cnn(layer0_input, embedding_size, input_len, config, pref)
+        return create_OLD_kim_cnn(layer0_input, embedding_size, input_len, config, pref)
     elif numConvLayers == -1:
         return create_KmaxPooling_cnn(layer0_input, embedding_size, input_len, config, pref)
     else:        
@@ -558,10 +558,10 @@ def recognition_network(x, n_input, hu_encoder, n_latent):
     mlp1 = MLP(activations=[Rectifier()], dims=[n_input, hu_encoder], name='recog_in_to_hidEncoder')
     initialize([mlp1])
     h_encoder = mlp1.apply(x)
-    h_encoder = debug_print(h_encoder, 'h_encoder', False)
     lin1 = Linear(name='recog_hiddEncoder_to_latent_mu', input_dim=hu_encoder, output_dim=n_latent)
     lin2 = Linear(name='recog_hiddEncoder_to_latent_sigma', input_dim=hu_encoder, output_dim=n_latent)
-    initialize([lin1, lin2])
+    initialize([lin1])
+    initialize([lin2], rndstd=0.001)
     mu = lin1.apply(h_encoder)
     log_sigma = lin2.apply(h_encoder)
     return mu, log_sigma
@@ -574,7 +574,8 @@ def prior_network(x, n_input, hu_encoder, n_latent):
     h_encoder = debug_print(h_encoder, 'h_encoder', False)
     lin1 = Linear(name='prior_hiddEncoder_to_latent_mu', input_dim=hu_encoder, output_dim=n_latent)
     lin2 = Linear(name='prior_hiddEncoder_to_latent_sigma', input_dim=hu_encoder, output_dim=n_latent)
-    initialize([lin1, lin2])
+    initialize([lin1])
+    initialize([lin2], rndstd=0.001)
     mu = lin1.apply(h_encoder)
     log_sigma = lin2.apply(h_encoder)
     return mu, log_sigma
@@ -587,7 +588,7 @@ def sampler(mu, log_sigma, deterministic=False, use_noise=True, input_log=False)
     if deterministic:
         #return mu + T.exp(0.5 * log_sigma)
         return mu + log_sigma
-    eps = srng.normal(mu.shape)
+    eps = srng.normal(size=mu.shape, std=1)
     # Reparametrize
     if use_noise:
         if input_log:
@@ -661,6 +662,7 @@ def compute_KLD(qmu, qsigma, pmu, psigma):
 def build_feature_vec(fea2obj, config):
     feature_vec = None; feature_vec_len = 0
     for fea in fea2obj:
+        print fea, fea2obj[fea]
         if fea == 'targets' : continue
         if fea in seq_features:
             x = T.matrix(fea, dtype='int32')
@@ -700,7 +702,7 @@ def build_vae_basic(kl_weight, feature_vec, feature_vec_len, config, y, test=Fal
     return y_hat, logpy_z, KLD
 
 def build_vae_conditoinal(kl_weight, entropy_weight, y_hat_init, feature_vec, feature_vec_len, config, y,
-		test=False, deterministic=False, num_targets=102, n_latent_z=50, hidden_size=400, hu_decoder=200):
+        test=False, deterministic=False, num_targets=102, n_latent_z=50, hidden_size=400, hu_decoder=200):
     logger.info('build VAE recognition network using conditional modeling: q(z|x,y)')
     y_as_float = T.cast(y, 'float32')
     drop_prob = float(config['dropprob']) if 'dropprob' in config else 0
@@ -720,11 +722,11 @@ def build_vae_conditoinal(kl_weight, entropy_weight, y_hat_init, feature_vec, fe
     z_prior = sampler(mu_prior, log_sigma_prior, deterministic=deterministic, use_noise=True, input_log=True)
     
     if test:
-        zl = [T.concatenate([z_prior, feature_vec], axis=1)]
+        geninputs = [T.concatenate([z_prior, feature_vec], axis=1)]
         if deterministic == False:
             for _ in range(500):
-                zl.append(sampler(mu_prior, log_sigma_prior, deterministic=False, use_noise=True))
-        y_hat, logpy_z = generation(zl, n_latent=n_latent_z+feature_vec_len, hu_decoder=hu_decoder, n_out=num_targets, y=y)
+                geninputs.append(T.concatenate([sampler(mu_prior, log_sigma_prior, deterministic=False, use_noise=True), feature_vec], axis=1))
+        y_hat, logpy_z = generation(geninputs, n_latent=n_latent_z+feature_vec_len, hu_decoder=hu_decoder, n_out=num_targets, y=y)
         y_hat_init = 0.5 * (y_hat + y_hat_init)
 #         y_hat_init = y_hat 
     else:
@@ -737,76 +739,69 @@ def build_vae_conditoinal(kl_weight, entropy_weight, y_hat_init, feature_vec, fe
 #     logpy_z *= 1 - T.nnet.sigmoid(kl_weight)
     return y_hat_init, logpy_z, KLD, y_hat
 
-def build_vae_conditoinal2(kl_weight, entropy_weight, y_hat_init, feature_vec, feature_vec_len, config, y,
-		test=False, deterministic=False, num_targets=102, n_latent_z=50, hidden_size=400, hu_decoder=200):
-    logger.info('build VAE recognition network using conditional modeling: q(z|x,y)')
-    logpy_xz_init = cross_entropy_loss(y_hat_init, y)
-    y_as_float = T.cast(y, 'float32')
-    drop_prob = float(config['dropprob']) if 'dropprob' in config else 0
-    logger.info('drop out probability: %d', drop_prob)
-    if test == False or True:
-        mask = T.cast(srng.binomial(n=1, p=1-drop_prob, size=feature_vec.shape), 'float32')
-#         feature_vec *= mask
-    recog_input = T.concatenate([feature_vec * mask, y_as_float], axis=1)
-    # recognition network q(z|x,y) #sampling z from recognition
-    mu_recog, log_sigma_recog = recognition_network(x=recog_input, n_input=feature_vec_len+num_targets, hu_encoder=hidden_size, n_latent=n_latent_z)
-    z_recog = sampler(mu_recog, log_sigma_recog, deterministic=deterministic, input_log=True)
-    
-    prior_input = T.concatenate([feature_vec, y_hat_init], axis=1)
-    prinlen = feature_vec_len + num_targets
-    mu_prior, log_sigma_prior = prior_network(x=prior_input, n_input=prinlen, hu_encoder=hidden_size, n_latent=n_latent_z)
-    z_prior = sampler(mu_prior, log_sigma_prior, deterministic=deterministic, use_noise=True, input_log=True)
-    mu_prior = debug_print(mu_prior, 'muprior', False)
-    if test:
-        if deterministic == False:
-	    zl = [z_prior]
-            for _ in range(500):
-                zl.append(sampler(mu_prior, log_sigma_prior, deterministic=False, use_noise=True))
-        y_hat, logpy_z = generation([z_prior], n_latent=n_latent_z, hu_decoder=hu_decoder, n_out=num_targets, y=y)
-        y_hat_init = 0.5 * (y_hat + y_hat_init)
-	print 'test'
-#         y_hat_init = y_hat 
-    else:
-        y_hat, logpy_z = generation([z_recog], n_latent=n_latent_z, hu_decoder=hu_decoder, n_out=num_targets, y=y)
-    logpy_z = (logpy_xz_init + logpy_z) / 2.
-    KLD = kl_weight * compute_KLD_old(mu_recog, log_sigma_recog, mu_prior, log_sigma_prior)
-    KLD = debug_print(KLD, 'kld', False)
-
-    return y_hat_init, logpy_z,KLD, y_hat
-
 def build_model_new(fea2obj, num_targets, config, kl_weight, entropy_weight, deterministic=False, test=False ):
-    hidden_size = int(config['hidden_units'])
+    hidden_size = config['hidden_units'].split()
+    use_highway = str_to_bool(config['use_highway']) if 'use_highway' in config else False
     use_gaus = str_to_bool(config['use_gaus']) if 'use_gaus' in config else False 
+    use_rec = str_to_bool(config['use_rec']) if 'use_rec' in config else True
     n_latent_z = int(config['n_latent']) if 'use_gaus' in config else 0
     use_noise = str_to_bool(config['use_noise']) if 'use_noise' in config else False
     use_vae=str_to_bool(config['use_vae']) if 'use_vae' in config else False
     hu_decoder = int(config['hu_decoder']) if 'hu_decoder' in config else hidden_size
-    logger.info('use_gaus: %s, use_noise: %s, use_vae: %s, hidden_size: %d, n_latent_z: %d, hu_decoder: %d, hu_encoder: %d', use_gaus, use_noise, use_vae, hidden_size, n_latent_z, hu_decoder, hidden_size)
+    logger.info('use_gaus: %s, use_rec: %s, use_noise: %s, use_vae: %s, hidden_size: %s, n_latent_z: %d, hu_decoder: %s, hu_encoder: %s', use_gaus, use_rec, use_noise, use_vae, hidden_size, n_latent_z, hu_decoder, hidden_size)
+    init_with_type = str_to_bool(config['init_with_type']) if 'init_with_type' in config else False
     y = T.matrix('targets', dtype='int32')
     
     drop_prob = float(config['dropout']) if 'dropout' in config else 0
     
     #build the feature vector with one model, e.g., with cnn or mean or lstm
     feature_vec, feature_vec_len = build_feature_vec(fea2obj, config)
+    
+    #drop out
     if drop_prob > 0:
         mask = T.cast(srng.binomial(n=1, p=1-drop_prob, size=feature_vec.shape), 'float32')
         if test:
             feature_vec *= (1 - drop_prob)
         else:
             feature_vec *= mask
-    logger.info('feature vec length = %s', feature_vec_len)
+            
 
-    if hidden_size > 0:
-        #MLP on feature fector    
+    #Highway network
+    if use_highway:
+        g_mlp = MLP(activations=[Rectifier()], dims=[feature_vec_len, feature_vec_len], name='g_mlp')
+        t_mlp = MLP(activations=[Logistic()], dims=[feature_vec_len, feature_vec_len], name='t_mlp')
+        initialize([g_mlp, t_mlp])
+        t = t_mlp.apply(feature_vec)
+        z = t * g_mlp.apply(feature_vec) + (1. - t) * feature_vec
+        feature_vec = z
+        
+    #MLP(s)         
+    logger.info('feature vec length = %s and hidden layer units = %s', feature_vec_len, ' '.join(hidden_size))
+    if len(hidden_size) > 1:
+        #2 MLP on feature fector    
+        mlp = MLP(activations=[Rectifier(), Rectifier()], dims=[feature_vec_len, int(hidden_size[0]), int(hidden_size[1])], name='joint_mlp')
+        initialize([mlp])
+        before_out = mlp.apply(feature_vec)
+        last_hidden_size = int(hidden_size[1])
+    else:
+        hidden_size = int(hidden_size[0])
         mlp = MLP(activations=[Rectifier()], dims=[feature_vec_len, hidden_size], name='joint_mlp')
         initialize([mlp])
         before_out = mlp.apply(feature_vec)
-    else:
-        before_out = feature_vec
-        hidden_size = feature_vec_len
+        last_hidden_size = hidden_size
+
+        
     #compute y_hat initial guess
-    hidden_to_output = Linear(name='hidden_to_output', input_dim=hidden_size, output_dim=num_targets)
-    initialize([hidden_to_output])
+    hidden_to_output = Linear(name='hidden_to_output', input_dim=last_hidden_size, output_dim=num_targets)
+    
+    typemfile = None
+    if init_with_type:
+        typemfile = config['dsdir'] + '/_typematrix.npy'
+        #typemfile = config['dsdir'] + '/_typeCooccurrMatrix.npy'
+        
+    initialize_lasthid(hidden_to_output, typemfile)
+#         initialize([hidden_to_output])
+    
     y_hat_init = Logistic().apply(hidden_to_output.apply(before_out))
     y_hat_init.name='y_hat_init'
     y_hat_init = debug_print(y_hat_init, 'yhat_init', False)
@@ -822,25 +817,33 @@ def build_model_new(fea2obj, num_targets, config, kl_weight, entropy_weight, det
             vae_conditional=str_to_bool(config['vae_cond']) 
             if vae_conditional:
                 y_hat, logpy_xz, KLD, y_hat_recog = build_vae_conditoinal(kl_weight, entropy_weight, y_hat_init, feature_vec, feature_vec_len, config, y,
-    			    test=test, deterministic=deterministic, num_targets=num_targets, n_latent_z=n_latent_z, hidden_size=hidden_size, hu_decoder=hu_decoder)
+                    test=test, deterministic=deterministic, num_targets=num_targets, n_latent_z=n_latent_z, hidden_size=hidden_size, hu_decoder=hu_decoder)
             else:
                 y_hat, logpy_xz, KLD = build_vae_basic(kl_weight, feature_vec, feature_vec_len, config, y, 
-    			    test=test, deterministic=deterministic, num_targets=num_targets, n_latent_z=n_latent_z, hidden_size=hidden_size, hu_decoder=hu_decoder)
+                    test=test, deterministic=deterministic, num_targets=num_targets, n_latent_z=n_latent_z, hidden_size=hidden_size, hu_decoder=hu_decoder)
                 y_hat_recog = y_hat
         else:
-            case = 1
-            logger.info('Not using VAE... but using more params')
-            # mu_prior, log_sigma_prior = prior_network(x=prior_input, n_input=feature_vec_len+num_targets, hu_encoder=hidden_size, n_latent=n_latent_z)
-            if case == 1:
+            if use_rec:
+                logger.info('Not using VAE... but using recursion')
                 prior_in = T.concatenate([feature_vec, y_hat_init], axis=1)
                 mu_prior, log_sigma_prior = prior_network(x=prior_in, n_input=feature_vec_len+num_targets, hu_encoder=hidden_size, n_latent=n_latent_z)
                 z_prior = sampler(mu_prior, log_sigma_prior, deterministic=deterministic, use_noise=use_noise)
                 zl = [T.concatenate([z_prior, feature_vec], axis=1)]
                 y_hat, logpy_xz = generation(zl, n_latent=n_latent_z+feature_vec_len, hu_decoder=hu_decoder, n_out=num_targets, y=y)
-            y_hat = (y_hat + y_hat_init) / 2. 
-            logpy_xz = (logpy_xz + logpy_xz_init) / 2.
+                y_hat = (y_hat + y_hat_init) / 2. 
+                logpy_xz = (logpy_xz + logpy_xz_init) / 2.
+            else:
+                prior_in = T.concatenate([feature_vec], axis=1)
+                mu_prior, log_sigma_prior = prior_network(x=prior_in, n_input=feature_vec_len, hu_encoder=hidden_size, n_latent=n_latent_z)
+                z_prior = sampler(mu_prior, log_sigma_prior, deterministic=deterministic, use_noise=use_noise)
+                zl = [T.concatenate([z_prior, feature_vec], axis=1)]
+                y_hat, logpy_xz = generation(zl, n_latent=n_latent_z+feature_vec_len, hu_decoder=hu_decoder, n_out=num_targets, y=y)
+            
             y_hat_recog = y_hat
                 
+
+    y_hat = debug_print(y_hat, 'y_hat', False)
+
     pat1 = T.mean(y[T.arange(y.shape[0]), T.argmax(y_hat, axis=1)])
     max_type = debug_print(T.argmax(y_hat_recog, axis=1), 'max_type', False)
     pat1_recog = T.mean(y[T.arange(y.shape[0]), max_type])
