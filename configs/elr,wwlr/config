@@ -1,0 +1,40 @@
+batchsize=500
+onlynt=False
+matrixdev=dev.probs
+matrixtest=test.probs
+Etrain=../../data/datasets/Etrain.names
+Edev=../../data/datasets/Edev.names
+Etest=../../data/datasets/Etest.names
+
+net=net
+typefile=../../data/datasets/types 
+loss_weight=0.000001
+loss_reg=L2
+norm=False
+nepochs=100
+lrate=0.008
+steprule=decay
+dropout=-0.5
+dsdir=../../data/sskip/fueldata/
+
+numtype=102
+hidden_units=600
+use_highway=False
+features=words entvec
+k_pool=1
+
+#word features:
+words_max_len=4
+words_emb_dim=100
+words_load_embedding=True
+words_tune_embedding=False
+words_nn=mean
+##conv features:
+words_convlayers=1
+words_num_filters=10
+words_maxfilter=200
+words_filterwidth=1 2 3
+##lstm features:
+words_h_lstm=5
+
+
