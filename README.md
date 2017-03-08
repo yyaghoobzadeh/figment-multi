@@ -1,4 +1,4 @@
-# FIGMENT-multi
+# FIGMENT-MULTI
 ## Multi-level Representations for Fine-Grained Typing of Knowledge Base Entities
 
 This is an extension to the old [FIGMENT](https://github.com/yyaghoobzadeh/figment/).  
