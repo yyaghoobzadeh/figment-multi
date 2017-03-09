@@ -1,3 +1,5 @@
+#first add the project directory to your PYTHONPATH
+#This script should be run only once, before starting the experiments, to build the datastreams
 cd data
 wget http://cistern.cis.lmu.de/figment2/embeddings/skip,200dim.txt
 wget http://cistern.cis.lmu.de/figment2/embeddings/sskip,200dim.txt
