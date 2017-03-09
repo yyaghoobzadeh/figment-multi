@@ -8,11 +8,14 @@ character, word, and entity level representations for entity typing.
 
 
 ### Installation
-Python: 2.7.11
-Numpy: 1.10.4
-Theano: 0.8.2
-Blocks: 0.1.1
-Fuel: 0.1.1
+```
+Python: 2.7.11 
+Numpy: 1.10.4 
+Theano: 0.8.2 
+Blocks: 0.1.1 
+Fuel: 0.1.1 
+```
+
 
 ### Prepare datasets
 To download embeddings and preparing datasets, first run this command: 
