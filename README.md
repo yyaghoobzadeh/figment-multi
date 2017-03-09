@@ -16,3 +16,9 @@ To download embeddings and preparing datasets, first run this command:
 sh prepare.sh
 ```
 ### Training
+To train, test and evaluate one of the models, you can use this script ("swlr" is the example model in this case):
+
+```
+sh run_one_model.sh swlr
+```
+
