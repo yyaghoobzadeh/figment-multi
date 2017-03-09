@@ -6,5 +6,13 @@ This is an extension to the old [FIGMENT](https://github.com/yyaghoobzadeh/figme
 There are implementations for learning 
 character, word, and entity level representations for entity typing.
 
-More information will be provided soon... 
 
+### Installation
+
+### Prepare datasets
+To download embeddings and preparing datasets, first run this command: 
+
+```
+sh prepare.sh
+```
+### Training
