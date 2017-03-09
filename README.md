@@ -21,4 +21,7 @@ To train, test and evaluate one of the models, you can use this script ("swlr" i
 ```
 sh run_one_model.sh swlr
 ```
+There should be a subdirectory with the name "swlr" in "configs" directory. 
+All the models in the paper already have one config directory. 
+Please see (https://github.com/yyaghoobzadeh/figment-multi/tree/master/configs) for the list. 
 
