@@ -37,6 +37,6 @@ Please see (https://github.com/yyaghoobzadeh/figment-multi/tree/master/configs) 
 ### References
 More information about the models is in this paper:
 
-<a href="https://github.com/yyaghoobzadeh/figment-multi/blob/master/eacl-multi-level.pdf"
-">*Multi-level Representations for Fine-Grained Typing of Knowledge Base Entities*</a>,
+<a href="https://github.com/yyaghoobzadeh/figment-multi/blob/master/eacl-multi-level.pdf">
+*Multi-level Representations for Fine-Grained Typing of Knowledge Base Entities*</a>,
 Yadollah Yaghoobzadeh, Hinrich schütze. (EACL2017).
