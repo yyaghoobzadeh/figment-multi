@@ -15,7 +15,7 @@ nepochs=100
 lrate=0.001
 steprule=decay
 dropout=-0.5
-dsdir=../../data/skip/fueldata/
+dsdir=../../data/skip/
 
 numtype=102
 hidden_units=400

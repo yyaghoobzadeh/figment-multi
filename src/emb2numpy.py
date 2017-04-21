@@ -1,4 +1,4 @@
-import sys
+import sys,os
 import numpy as np
 import numpy
 
@@ -39,6 +39,8 @@ def read_embeddings(fname, num=None):
 
 if __name__ == '__main__':
     embpath = sys.argv[1]
+    if os.path.exists(embpath+'.npy'):
+        sys.exit()
     embmatrix, w2idx, idx2w = read_embeddings(embpath)
     numpy.save(embpath, embmatrix)
     vocab = [idx2w[i] for i in range(len(idx2w))]
