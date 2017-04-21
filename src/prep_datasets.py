@@ -5,10 +5,10 @@ Created on Oct 27, 2015
 '''
 import sys, os, string
 import theano,numpy, codecs, h5py, yaml, logging
-from src.common.myutils import convertTargetsToBinVec, get_ent_names
+from myutils import convertTargetsToBinVec, get_ent_names
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 logger = logging.getLogger('makefueldataset')
-import src.common.myutils as cmn
+import myutils as cmn
 from fuel.datasets import H5PYDataset
 import numpy as np
 

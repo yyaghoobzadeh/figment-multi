@@ -10,7 +10,7 @@ cd skip
 cp ../datasets/* .
 mv ../skip,200dim.txt .
 mkdir fueldata
-python ../../src/classification/nn/gm/make_fuel_dataset.py config &
+python ../../src/make_fuel_dataset.py config &
 wait
 rm Etrain.names Edev.names Etest.names types
 
@@ -20,10 +20,5 @@ cp ../datasets/* .
 mv ../sskip,200dim.txt .
 mv ../fasttext,200dim.txt .
 mkdir fueldata
-python ../../src/classification/nn/gm/make_fuel_dataset.py config &
+python ../../src/make_fuel_dataset.py config &
 rm Etrain.names Edev.names Etest.names types
-
-
-
-
-

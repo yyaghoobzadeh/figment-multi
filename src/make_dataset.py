@@ -5,7 +5,7 @@ Created on Oct 27, 2015
 '''
 import sys, os, string
 import theano,numpy, codecs, h5py, yaml, logging
-from src.common.myutils import convertTargetsToBinVec, yyreadwordvectors, get_ngram_seq, \
+from myutils import convertTargetsToBinVec, yyreadwordvectors, get_ngram_seq, \
     read_embeddings_vocab, buildtypevecmatrix, buildcosinematrix,\
     read_embeddings, get_ent_names, str_to_bool
 from _collections import defaultdict
@@ -13,7 +13,7 @@ from collections import namedtuple
 import operator
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 logger = logging.getLogger('makefueldataset')
-import src.common.myutils as cmn
+import myutils as cmn
 from fuel.datasets import H5PYDataset
 from unidecode import unidecode
 import numpy as np

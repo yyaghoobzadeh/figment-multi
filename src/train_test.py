@@ -22,7 +22,7 @@ from blocks.model import Model
 from blocks.monitoring import aggregation
 from blocks.roles import INPUT, WEIGHT
 from blocks.theano_expressions import l2_norm
-from src.common.myutils import debug_print
+from myutils import debug_print
 from src.classification.nn import track_best, MainLoop
 from src.classification.nn.gm.model import *
 from src.classification.nn.gm.model import build_input_objs, build_model_new
@@ -31,7 +31,7 @@ import theano.tensor as T
 import argparse
 from blocks.bricks import MLP, Tanh, NDimensionalSoftmax, Linear, Softmax, Logistic
 from blocks.serialization import load
-from src.classification.nn.gm.make_dataset_new import load_ent_ds
+from make_dataset import load_ent_ds
 from numpy import argmax
 from subprocess import Popen
 from blocks.utils import shared_floatx
