@@ -57,7 +57,7 @@ if __name__ == '__main__':
     targetTypesFile=config['typefile']
     max_names = [int(n) for n in config['name_num'].split()]
     dsdir = config['dsdir']
-    
+
     upto = -1
     (t2idx, idx2t) = cmn.loadtypes(targetTypesFile)
     numtargets = len(t2idx)
@@ -75,4 +75,3 @@ if __name__ == '__main__':
     gen_new_ds(etrain2names, etrain2types, max_names[0], outfile = dsdir + '/train.txt')
     gen_new_ds(edev2names, edev2types, max_names[1], outfile = dsdir + '/dev.txt')
     gen_new_ds(etest2names, etest2types, max_names[2], outfile = dsdir + '/test.txt')
-    

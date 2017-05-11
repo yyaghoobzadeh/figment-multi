@@ -23,10 +23,9 @@ from blocks.monitoring import aggregation
 from blocks.roles import INPUT, WEIGHT
 from blocks.theano_expressions import l2_norm
 from myutils import debug_print
-from src.classification.nn import track_best, MainLoop
-from src.classification.nn.gm.model import *
-from src.classification.nn.gm.model import build_input_objs, build_model_new
-import src.common.myutils as cmn
+from nn import track_best, MainLoop
+from model import *
+import myutils as cmn
 import theano.tensor as T
 import argparse
 from blocks.bricks import MLP, Tanh, NDimensionalSoftmax, Linear, Softmax, Logistic
@@ -44,7 +43,7 @@ print theano
 
 def sigmoid(x):
     return 1 / (1 + math.exp(-x))
-  
+
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 logger = logging.getLogger('train.py')
 seed = 42
@@ -57,10 +56,10 @@ else:
 class EntityTypingGlobal(object):
     def __init__(self, config):
         self._config = config
-        
+
     def training(self, fea2obj, batch_size, learning_rate=0.005, steprule='adagrad', wait_epochs=5, kl_weight_init=None, klw_ep=50, klw_inc_rate=0, num_epochs=None):
         networkfile = self._config['net']
-        
+
         n_epochs = num_epochs or int(self._config['nepochs'])
         reg_weight=float(self._config['loss_weight'])
         reg_type=self._config['loss_reg']
@@ -68,28 +67,28 @@ class EntityTypingGlobal(object):
         train_stream, num_samples_train = get_comb_stream(fea2obj, 'train', batch_size, shuffle=True, num_examples=numtrain)
         dev_stream, num_samples_dev = get_comb_stream(fea2obj, 'dev', batch_size=None, shuffle=False)
         logger.info('sources: %s -- number of train/dev samples: %d/%d', train_stream.sources, num_samples_train, num_samples_dev)
-        
+
         t2idx = fea2obj['targets'].t2idx
         klw_init = kl_weight_init or float(self._config['kld_weight']) if 'kld_weight' in self._config else 1
         logger.info('kl_weight_init: %d', klw_init)
         kl_weight = shared_floatx(klw_init, 'kl_weight')
         entropy_weight = shared_floatx(1., 'entropy_weight')
-        
+
         cost, p_at_1, _, KLD, logpy_xz, pat1_recog, misclassify_rate= build_model_new(fea2obj, len(t2idx), self._config, kl_weight, entropy_weight)
-        
+
         cg = ComputationGraph(cost)
-        
+
         weights = VariableFilter(roles=[WEIGHT])(cg.parameters)
         logger.info('Model weights are: %s', weights)
         if 'L2' in reg_type:
             cost += reg_weight * l2_norm(weights)
             logger.info('applying %s with weight: %f ', reg_type, reg_weight)
-          
+
         dropout = -0.1
         if dropout > 0:
             cg = apply_dropout(cg, weights, dropout)
-            cost = cg.outputs[0]      
-        
+            cost = cg.outputs[0]
+
         cost.name = 'cost'
         logger.info('Our Algorithm is : %s, and learning_rate: %f', steprule, learning_rate)
         if 'adagrad' in steprule:
@@ -105,7 +104,7 @@ class EntityTypingGlobal(object):
             cnf_step_rule = Adam(learning_rate=learning_rate)
         else:
             logger.info('The steprule param is wrong! which is: %s', steprule)
-        
+
         algorithm = GradientDescent(cost=cost, parameters=cg.parameters, step_rule=cnf_step_rule, on_unused_sources='warn')
         #algorithm.add_updates(updates)
         gradient_norm = aggregation.mean(algorithm.total_gradient_norm)
@@ -113,31 +112,31 @@ class EntityTypingGlobal(object):
         monitored_vars = [cost, gradient_norm, step_norm, p_at_1, KLD, logpy_xz, kl_weight, pat1_recog]
         train_monitor = TrainingDataMonitoring(variables=monitored_vars, after_batch=True,
                                                before_first_epoch=True, prefix='tra')
-        
+
         dev_monitor = DataStreamMonitoring(variables=[cost, p_at_1, KLD, logpy_xz, pat1_recog, misclassify_rate], after_epoch=True,
                                            before_first_epoch=True, data_stream=dev_stream, prefix="dev")
-        
-        extensions = [dev_monitor, train_monitor, Timing(), 
+
+        extensions = [dev_monitor, train_monitor, Timing(),
                       TrackTheBest('dev_cost'),
                       FinishIfNoImprovementAfter('dev_cost_best_so_far', epochs=wait_epochs),
                       Printing(after_batch=False), #, ProgressBar()
                       FinishAfter(after_n_epochs=n_epochs),
                       saveload.Load(networkfile+'.toload.pkl'),
                       ] + track_best('dev_cost', networkfile+ '.best.pkl')
-                      
+
         #extensions.append(SharedVariableModifier(kl_weight,
         #                                          lambda n, klw: numpy.cast[theano.config.floatX] (klw_inc_rate + klw), after_epoch=False, every_n_epochs=klw_ep, after_batch=False))
 #         extensions.append(SharedVariableModifier(entropy_weight,
 #                                                   lambda n, crw: numpy.cast[theano.config.floatX](crw - klw_inc_rate), after_epoch=False, every_n_epochs=klw_ep, after_batch=False))
-        
+
         logger.info('number of parameters in the model: %d', tensor.sum([p.size for p in cg.parameters]).eval())
         logger.info('Lookup table sizes: %s', [p.size.eval() for p in cg.parameters if 'lt' in p.name])
-        
+
         main_loop = MainLoop(data_stream=train_stream, algorithm=algorithm,
                              model=Model(cost), extensions=extensions)
         main_loop.run()
-    
-    
+
+
     def testing(self, fea2obj):
         config = self._config
         dsdir = config['dsdir']
@@ -148,7 +147,7 @@ class EntityTypingGlobal(object):
         devMentions = load_ent_ds(devfile)
         tstMentions = load_ent_ds(testfile)
         logger.info('#dev: %d #test: %d', len(devMentions), len(tstMentions))
-        
+
         main_loop = load(networkfile + '.best.pkl')
         logger.info('Model loaded. Building prediction function...')
         old_model = main_loop.model
@@ -156,15 +155,15 @@ class EntityTypingGlobal(object):
         sources = [inp.name for inp in old_model.inputs]
 #         fea2obj = build_input_objs(sources, config)
         t2idx = fea2obj['targets'].t2idx
-        deterministic = str_to_bool(config['use_mean_pred']) if 'use_mean_pred' in config else True 
+        deterministic = str_to_bool(config['use_mean_pred']) if 'use_mean_pred' in config else True
         kl_weight = shared_floatx(0.001, 'kl_weight')
         entropy_weight= shared_floatx(0.001, 'entropy_weight')
-       
-       
+
+
         cost, _, y_hat, _, _,_,_ = build_model_new(fea2obj, len(t2idx), self._config, kl_weight, entropy_weight, deterministic=deterministic, test=True)
         model = Model(cost)
         model.set_parameter_values(old_model.get_parameter_values())
-        
+
         theinputs = []
         for fe in fea2obj.keys():
             if 'targets' in fe:
@@ -172,37 +171,37 @@ class EntityTypingGlobal(object):
             for inp in model.inputs:
                 if inp.name == fe:
                     theinputs.append(inp)
-                    
+
 #         theinputs = [inp for inp in model.inputs if inp.name != 'targets']
         print "theinputs: ", theinputs
         predict = theano.function(theinputs, y_hat)
-        
+
         test_stream, num_samples_test = get_comb_stream(fea2obj, 'test', batch_size, shuffle=False)
         dev_stream, num_samples_dev = get_comb_stream(fea2obj, 'dev', batch_size, shuffle=False)
         logger.info('sources: %s -- number of test/dev samples: %d/%d', test_stream.sources, num_samples_test, num_samples_dev)
         idx2type = {idx:t for t,idx in t2idx.iteritems()}
-        
+
         logger.info('Starting to apply on dev inputs...')
         self.applypredict(theinputs, predict, dev_stream, devMentions, num_samples_dev, batch_size, os.path.join(config['exp_dir'], config['matrixdev']), idx2type)
         logger.info('...apply on dev data finished')
-        
+
         logger.info('Starting to apply on test inputs...')
         self.applypredict(theinputs, predict, test_stream, tstMentions, num_samples_test, batch_size, os.path.join(config['exp_dir'], config['matrixtest']), idx2type)
         logger.info('...apply on test data finished')
-        
+
     def applypredict(self, theinputs, predict, data_stream, dsMentions, num_samples, batch_size, outfile, idx2type):
         num_batches = num_samples / batch_size
         if num_samples % batch_size != 0:
             num_batches += 1
         goods = 0.;
         epoch_iter = data_stream.get_epoch_iterator(as_dict=True)
-        f = open(outfile, 'w') 
+        f = open(outfile, 'w')
         print num_batches
         for i in range(num_batches):
             src2vals  = epoch_iter.next()
             inp = [src2vals[src.name] for src in theinputs]
             probs = predict(*inp)
-            
+
             y_curr = src2vals['targets']
             for j in range(len(probs)):
                 index = i * batch_size + j;
@@ -217,16 +216,16 @@ class EntityTypingGlobal(object):
                 f.write(onestr.strip() + '\n')
         f.close()
         logger.info('P@1 is = %f ', goods / num_samples)
-    
+
     def evaluate(self, configfile):
         cmd = 'python ' + dirname + '/matrix2measures_ents.py ' + configfile + ' > ' + configfile + '.meas.ents'
-        p = Popen(cmd, shell=True); 
-        p.wait() 
+        p = Popen(cmd, shell=True);
+        p.wait()
         logger.info('... entity measures finished!')
         cmd = 'python ' + dirname + '/matrix2measures_types.py ' + configfile + ' > ' + configfile + '.meas.types'
-        p = Popen(cmd, shell=True); 
+        p = Popen(cmd, shell=True);
         p.wait()
-        
+
 def main(args):
     logger.info('loading config file: %s', args.config)
     exp_dir, _ = os.path.split(os.path.abspath(args.config))
@@ -234,7 +233,7 @@ def main(args):
     config['exp_dir'] = exp_dir
     config['net'] = os.path.join(exp_dir, config['net'])
     batch_size =  int(config['batchsize'])
-    features = config['features'].split(' ') #i.e. letters words entvec 
+    features = config['features'].split(' ') #i.e. letters words entvec
     if batch_size == 0: batch_size = None
     inp_srcs = []
     for fea in features:
@@ -243,10 +242,10 @@ def main(args):
         else:
             inp_srcs.append(fea)
     our_sources = inp_srcs + ['targets']
-    
+
     fea2obj = build_input_objs(our_sources, config)
-    
-    typer = EntityTypingGlobal(config) 
+
+    typer = EntityTypingGlobal(config)
     if args.train:
         import shutil
         #typer.training(fea2obj, batch_size, learning_rate=float(config['lrate']), steprule=config['steprule'], wait_epochs=10, kl_weight_init=1, klw_ep=100, klw_inc_rate=0, num_epochs=50)
@@ -266,34 +265,32 @@ def main(args):
 
     if args.test:
         typer.testing(fea2obj)
-    
+
     if args.eval:
         typer.evaluate(args.config)
-    
-    
+
+
     #scriptfile = '/mounts/Users/student/yadollah/new_ws/phdworks/src/classification/nn/blocks/joint/test.py'
     #os.system('python ' + scriptfile + ' ' + sys.argv[1])
-    
+
 def get_argument_parser():
     """ Construct a parser for the command-line arguments. """
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config", "-c", help="Path to configuration file")
-    
+
     parser.add_argument(
         "--test", "-t", type=bool, help="Applying the model on the test data, or not")
-    
+
     parser.add_argument(
         "--train", "-tr", type=bool, help="Training the model on the test data, or not")
 
     parser.add_argument(
         "--eval", "-ev", type=bool, help="Evaluating the model with f-measures")
     return parser
-    
+
 if __name__ == '__main__':
 #     theano.config.dnn.enabled = False
     parser = get_argument_parser()
     args = parser.parse_args()
     main(args)
-    
-    
