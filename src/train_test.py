@@ -23,7 +23,6 @@ from blocks.monitoring import aggregation
 from blocks.roles import INPUT, WEIGHT
 from blocks.theano_expressions import l2_norm
 from myutils import debug_print
-from nn import track_best, MainLoop
 from model import *
 import myutils as cmn
 import theano.tensor as T
