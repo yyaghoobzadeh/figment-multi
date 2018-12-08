@@ -32,7 +32,6 @@ from myutils import build_ngram_vocab, get_ngram_seq, \
     str_to_bool, debug_print
 from myutils import debug_print, logger, str_to_bool
 import theano.tensor as T
-from nn import ranking_loss, softmax_layer
 from collections import OrderedDict
 logger = logging.getLogger('model.py')
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
